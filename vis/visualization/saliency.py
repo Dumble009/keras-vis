@@ -1,12 +1,13 @@
 from __future__ import absolute_import
 
 import numpy as np
+import tensorflow as tf
 from scipy.ndimage.interpolation import zoom
 
-from keras.layers.convolutional import _Conv
-from keras.layers.pooling import _Pooling1D, _Pooling2D, _Pooling3D
-from keras.layers.wrappers import Wrapper
-from keras import backend as K
+from tensorflow.python.keras.layers.convolutional import Conv
+from tensorflow.python.keras.layers.pooling import Pooling1D, Pooling2D, Pooling3D
+from tensorflow.python.keras.layers.wrappers import Wrapper
+from tensorflow.keras import backend as K
 
 from ..losses import ActivationMaximization
 from ..optimizer import Optimizer
@@ -30,7 +31,7 @@ def _find_penultimate_layer(model, layer_idx, penultimate_layer_idx):
         for idx, layer in utils.reverse_enumerate(model.layers[:layer_idx - 1]):
             if isinstance(layer, Wrapper):
                 layer = layer.layer
-            if isinstance(layer, (_Conv, _Pooling1D, _Pooling2D, _Pooling3D)):
+            if isinstance(layer, (Conv, Pooling1D, Pooling2D, Pooling3D)):
                 penultimate_layer_idx = idx
                 break
 
@@ -134,7 +135,7 @@ def visualize_saliency(model, layer_idx, filter_indices, seed_input, wrt_tensor=
     return visualize_saliency_with_losses(model.input, losses, seed_input, wrt_tensor, grad_modifier, keepdims)
 
 
-def visualize_cam_with_losses(input_tensor, losses, seed_input, penultimate_layer, grad_modifier=None):
+def visualize_cam_with_losses(input_tensor, losses, sess, seed_input, penultimate_layer, grad_modifier=None):
     """Generates a gradient based class activation map (CAM) by using positive gradients of `input_tensor`
     with respect to weighted `losses`.
 
@@ -161,42 +162,44 @@ def visualize_cam_with_losses(input_tensor, losses, seed_input, penultimate_laye
     Returns:
         The normalized gradients of `seed_input` with respect to weighted `losses`.
     """
-    penultimate_output = penultimate_layer.output
-    opt = Optimizer(input_tensor, losses, wrt_tensor=penultimate_output, norm_grads=False)
-    _, grads, penultimate_output_value = opt.minimize(seed_input, max_iter=1, grad_modifier=grad_modifier, verbose=False)
+    with sess.graph.as_default():
+        K.set_session(sess)
+        penultimate_output = penultimate_layer.output
+        opt = Optimizer(input_tensor, losses, wrt_tensor=penultimate_output, norm_grads=False)
+        _, grads, penultimate_output_value = opt.minimize(sess, seed_input, max_iter=1, grad_modifier=grad_modifier, verbose=False)
 
-    # For numerical stability. Very small grad values along with small penultimate_output_value can cause
-    # w * penultimate_output_value to zero out, even for reasonable fp precision of float32.
-    grads = grads / (np.max(grads) + K.epsilon())
+        # For numerical stability. Very small grad values along with small penultimate_output_value can cause
+        # w * penultimate_output_value to zero out, even for reasonable fp precision of float32.
+        grads = grads / (np.max(grads) + K.epsilon())
 
-    # Average pooling across all feature maps.
-    # This captures the importance of feature map (channel) idx to the output.
-    channel_idx = 1 if K.image_data_format() == 'channels_first' else -1
-    other_axis = np.delete(np.arange(len(grads.shape)), channel_idx)
-    weights = np.mean(grads, axis=tuple(other_axis))
+        # Average pooling across all feature maps.
+        # This captures the importance of feature map (channel) idx to the output.
+        channel_idx = 1 if K.image_data_format() == 'channels_first' else -1
+        other_axis = np.delete(np.arange(len(grads.shape)), channel_idx)
+        weights = np.mean(grads, axis=tuple(other_axis))
 
-    # Generate heatmap by computing weight * output over feature maps
-    output_dims = utils.get_img_shape(penultimate_output_value)[2:]
-    heatmap = np.zeros(shape=output_dims, dtype=K.floatx())
-    for i, w in enumerate(weights):
-        if channel_idx == -1:
-            heatmap += w * penultimate_output_value[0, ..., i]
-        else:
-            heatmap += w * penultimate_output_value[0, i, ...]
+        # Generate heatmap by computing weight * output over feature maps
+        output_dims = utils.get_img_shape(penultimate_output_value)[2:]
+        heatmap = np.zeros(shape=output_dims, dtype=K.floatx())
+        for i, w in enumerate(weights):
+            if channel_idx == -1:
+                heatmap += w * penultimate_output_value[0, ..., i]
+            else:
+                heatmap += w * penultimate_output_value[0, i, ...]
 
-    # ReLU thresholding to exclude pattern mismatch information (negative gradients).
-    heatmap = np.maximum(heatmap, 0)
+        # ReLU thresholding to exclude pattern mismatch information (negative gradients).
+        heatmap = np.maximum(heatmap, 0)
 
-    # The penultimate feature map size is definitely smaller than input image.
-    input_dims = utils.get_img_shape(input_tensor)[2:]
+        # The penultimate feature map size is definitely smaller than input image.
+        input_dims = utils.get_img_shape(input_tensor)[2:]
 
-    # Figure out the zoom factor.
-    zoom_factor = [i / (j * 1.0) for i, j in iter(zip(input_dims, output_dims))]
-    heatmap = zoom(heatmap, zoom_factor)
-    return utils.normalize(heatmap)
+        # Figure out the zoom factor.
+        zoom_factor = [i / (j * 1.0) for i, j in iter(zip(input_dims, output_dims))]
+        heatmap = zoom(heatmap, zoom_factor)
+        return utils.normalize(heatmap)
 
 
-def visualize_cam(model, layer_idx, filter_indices,
+def visualize_cam(model, layer_idx, sess, filter_indices,
                   seed_input, penultimate_layer_idx=None,
                   backprop_modifier=None, grad_modifier=None):
     """Generates a gradient based class activation map (grad-CAM) that maximizes the outputs of
@@ -231,15 +234,17 @@ def visualize_cam(model, layer_idx, filter_indices,
         The heatmap image indicating the input regions whose change would most contribute towards
         maximizing the output of `filter_indices`.
     """
-    if backprop_modifier is not None:
-        modifier_fn = get(backprop_modifier)
-        model = modifier_fn(model)
+    with sess.graph.as_default():
+        K.set_session(sess)
+        if backprop_modifier is not None:
+            modifier_fn = get(backprop_modifier)
+            model = modifier_fn(model)
 
-    penultimate_layer = _find_penultimate_layer(model, layer_idx, penultimate_layer_idx)
+        penultimate_layer = _find_penultimate_layer(model, layer_idx, penultimate_layer_idx)
 
-    # `ActivationMaximization` outputs negative gradient values for increase in activations. Multiply with -1
-    # so that positive gradients indicate increase instead.
-    losses = [
-        (ActivationMaximization(model.layers[layer_idx], filter_indices), -1)
-    ]
-    return visualize_cam_with_losses(model.input, losses, seed_input, penultimate_layer, grad_modifier)
+        # `ActivationMaximization` outputs negative gradient values for increase in activations. Multiply with -1
+        # so that positive gradients indicate increase instead.
+        losses = [
+            (ActivationMaximization(model.layers[layer_idx], filter_indices), -1)
+        ]
+        return visualize_cam_with_losses(model.input, losses, sess, seed_input, penultimate_layer, grad_modifier)

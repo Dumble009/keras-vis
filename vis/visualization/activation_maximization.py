@@ -10,7 +10,7 @@ from ..backprop_modifiers import get
 from ..utils import utils
 
 
-def visualize_activation_with_losses(input_tensor, losses, wrt_tensor=None,
+def visualize_activation_with_losses(input_tensor, losses, sess, wrt_tensor=None,
                                      seed_input=None, input_range=(0, 255),
                                      **optimizer_params):
     """Generates the `input_tensor` that minimizes the weighted `losses`. This function is intended for advanced
@@ -34,6 +34,7 @@ def visualize_activation_with_losses(input_tensor, losses, wrt_tensor=None,
     """
     # Default optimizer kwargs.
     optimizer_params = utils.add_defaults_to_kwargs({
+        'sess':sess,
         'seed_input': seed_input,
         'max_iter': 200,
         'verbose': False
@@ -51,7 +52,7 @@ def visualize_activation_with_losses(input_tensor, losses, wrt_tensor=None,
     return img
 
 
-def visualize_activation(model, layer_idx, filter_indices=None, wrt_tensor=None,
+def visualize_activation(model, layer_idx, sess, filter_indices=None, wrt_tensor=None,
                          seed_input=None, input_range=(0, 255),
                          backprop_modifier=None, grad_modifier=None,
                          act_max_weight=1, lp_norm_weight=10, tv_weight=10,
@@ -108,5 +109,5 @@ def visualize_activation(model, layer_idx, filter_indices=None, wrt_tensor=None,
         'grad_modifier': grad_modifier
     }, **optimizer_params)
 
-    return visualize_activation_with_losses(model.input, losses, wrt_tensor,
+    return visualize_activation_with_losses(model.input, losses, sess, wrt_tensor,
                                             seed_input, input_range, **optimizer_params)
