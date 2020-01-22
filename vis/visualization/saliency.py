@@ -48,7 +48,7 @@ def _find_penultimate_layer(model, layer_idx, penultimate_layer_idx):
     return model.layers[penultimate_layer_idx]
 
 
-def visualize_saliency_with_losses(input_tensor, losses, seed_input, wrt_tensor=None, grad_modifier='absolute', keepdims=False):
+def visualize_saliency_with_losses(input_tensor, losses, sess, seed_input, wrt_tensor=None, grad_modifier='absolute', keepdims=False):
     """Generates an attention heatmap over the `seed_input` by using positive gradients of `input_tensor`
     with respect to weighted `losses`.
 
@@ -76,16 +76,18 @@ def visualize_saliency_with_losses(input_tensor, losses, seed_input, wrt_tensor=
     Returns:
         The normalized gradients of `seed_input` with respect to weighted `losses`.
     """
-    opt = Optimizer(input_tensor, losses, wrt_tensor=wrt_tensor, norm_grads=False)
-    grads = opt.minimize(seed_input=seed_input, max_iter=1, grad_modifier=grad_modifier, verbose=False)[1]
+    with sess.graph.as_default():
+        K.set_session(sess)
+        opt = Optimizer(input_tensor, losses, wrt_tensor=wrt_tensor, norm_grads=False)
+        grads = opt.minimize(seed_input=seed_input, max_iter=1, grad_modifier=grad_modifier, verbose=False)[1]
 
-    if not keepdims:
-        channel_idx = 1 if K.image_data_format() == 'channels_first' else -1
-        grads = np.max(grads, axis=channel_idx)
-    return utils.normalize(grads)[0]
+        if not keepdims:
+            channel_idx = 1 if K.image_data_format() == 'channels_first' else -1
+            grads = np.max(grads, axis=channel_idx)
+        return utils.normalize(grads)[0]
 
 
-def visualize_saliency(model, layer_idx, filter_indices, seed_input, wrt_tensor=None,
+def visualize_saliency(model, layer_idx, sess, filter_indices, seed_input, wrt_tensor=None,
                        backprop_modifier=None, grad_modifier='absolute', keepdims=False):
     """Generates an attention heatmap over the `seed_input` for maximizing `filter_indices`
     output in the given `layer_idx`.
@@ -123,16 +125,18 @@ def visualize_saliency(model, layer_idx, filter_indices, seed_input, wrt_tensor=
         The heatmap image indicating the `seed_input` regions whose change would most contribute towards
         maximizing the output of `filter_indices`.
     """
-    if backprop_modifier is not None:
-        modifier_fn = get(backprop_modifier)
-        model = modifier_fn(model)
+    with sess.graph.as_default():
+        K.set_session(sess)
+        if backprop_modifier is not None:
+            modifier_fn = get(backprop_modifier)
+            model = modifier_fn(model)
 
-    # `ActivationMaximization` loss reduces as outputs get large, hence negative gradients indicate the direction
-    # for increasing activations. Multiply with -1 so that positive gradients indicate increase instead.
-    losses = [
-        (ActivationMaximization(model.layers[layer_idx], filter_indices), -1)
-    ]
-    return visualize_saliency_with_losses(model.input, losses, seed_input, wrt_tensor, grad_modifier, keepdims)
+        # `ActivationMaximization` loss reduces as outputs get large, hence negative gradients indicate the direction
+        # for increasing activations. Multiply with -1 so that positive gradients indicate increase instead.
+        losses = [
+            (ActivationMaximization(model.layers[layer_idx], filter_indices), -1)
+        ]
+        return visualize_saliency_with_losses(model.input, losses, seed_input, wrt_tensor, grad_modifier, keepdims)
 
 
 def visualize_cam_with_losses(input_tensor, losses, sess, seed_input, penultimate_layer, grad_modifier=None):
