@@ -136,7 +136,7 @@ def visualize_saliency(model, layer_idx, sess, filter_indices, seed_input, wrt_t
         losses = [
             (ActivationMaximization(model.layers[layer_idx], filter_indices), -1)
         ]
-        return visualize_saliency_with_losses(model.input, losses, seed_input, wrt_tensor, grad_modifier, keepdims)
+        return visualize_saliency_with_losses(model.input, losses, sess, seed_input, wrt_tensor, grad_modifier, keepdims)
 
 
 def visualize_cam_with_losses(input_tensor, losses, sess, seed_input, penultimate_layer, grad_modifier=None):
